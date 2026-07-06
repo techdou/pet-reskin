@@ -99,6 +99,41 @@ class ValidateOutputTests(unittest.TestCase):
             report = validate_output.validate(manifest_path, sprites, target=None, allow_partial=False)
             self.assertTrue(report["ok"], report)
 
+    def test_parse_frame_keys_ignores_keys_outside_frames_block(self):
+        """帧键解析只认 frames 块内部，不抓注释/字符串里的同名伪键。"""
+        config_text = (
+            "export default {\n"
+            "  baseSize: 72,\n"
+            "  frames: {\n"
+            "    idle: './a.png',\n"
+            "    sleep: './b.png',\n"
+            "  },\n"
+            "  // 注释里出现的 idle: 不该被算进去\n"
+            "  quotes: ['idle: fake', 'walkRight: also fake'],\n"
+            "}\n"
+        )
+        keys = validate_output.parse_frame_keys_from_config(config_text)
+        self.assertEqual(keys, ["idle", "sleep"])
+        # 不该混入 walkRight（只出现在 quotes 字符串里）
+        self.assertNotIn("walkRight", keys)
+
+    def test_validate_reports_failures_field_in_manifest(self):
+        """manifest 带 failures 字段时，validate 应原样返回（不报错，供调用方决策）。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sprites = root / "sprites"
+            sprites.mkdir()
+            data = manifest(include_cloud=False)
+            data["failures"] = [{"frame": "cloud", "file": "cloud.png", "error": "rate limited"}]
+            manifest_path = sprites / "manifest.json"
+            manifest_path.write_text(json.dumps(data), encoding="utf-8")
+            for fname in data["files"]:
+                Image.new("RGBA", (4, 4), (0, 0, 0, 0)).save(sprites / fname)
+
+            report = validate_output.validate(manifest_path, sprites, target=None, allow_partial=False)
+            # cloud 是可选帧，失败不影响 ok
+            self.assertTrue(report["ok"], report)
+
 
 if __name__ == "__main__":
     unittest.main()

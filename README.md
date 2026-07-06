@@ -198,19 +198,19 @@ These tests do not call Gemini. They validate config replacement, strict partial
 
 ### `GEMINI_API_KEY` missing
 
-Set the environment variable before running generation. `check_env.py` reports this before API calls.
+Set the environment variable before running generation. `check_env.py` reports this before API calls. Run `check_env.py --probe` (or let `pet_reskin.py` do it) to also verify the key is accepted by the API, so auth failures surface before any image is generated.
 
 ### Some sprites failed
 
-The manifest records `failures`, `missingFrames`, and `missingRequiredFrames`. Strict mode refuses installation. Improve the plan description, rerun, or repair a single frame with `--only`.
+The manifest records `failures`, `missingFrames`, and `missingRequiredFrames`. Strict mode refuses installation. Improve the plan description, rerun, or repair a single frame with `--only`. Strict checks only fire on full runs; repair mode (`--only`) intentionally skips them so partial manifests can be inspected.
 
-### Green residue remains after chroma keying
+### Green halo / residue around the character
 
-The default key color is `#78C878`. If the character itself is green, change `KEY_COLOR` and `KEY_HEX` in `generate_sprites.py` to a color the character does not use.
+Chroma keying uses a smooth alpha gradient (not a hard cutoff) plus a despill pass, so anti-aliased edges fade cleanly. If you still see a green halo, tune the gradient via `PET_RESKIN_KEY_INNER` (default 30, below = fully transparent) and `PET_RESKIN_KEY_OUTER` (default 120, above = fully opaque). If the character itself is green, change `KEY_COLOR` and `KEY_HEX` in `generate_sprites.py` to a color the character does not use.
 
 ### `pet.config.js` cannot be replaced
 
-The script expects flat `frames`, `quotes`, and numeric `baseSize` fields. If the target config uses a different structure, update the config manually or adapt `apply_config.py` after reading `references/canvas-pet-contract.md`.
+The script expects flat `frames`, `quotes`, and numeric `baseSize` fields. It now uses balanced-brace scanning (not regex) to locate the `frames` and `quotes` blocks, so string values containing `}` or `]` no longer break replacement. If the target config uses a different structure, update the config manually or adapt `apply_config.py` after reading `references/canvas-pet-contract.md`.
 
 ## License
 

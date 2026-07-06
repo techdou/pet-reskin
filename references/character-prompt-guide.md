@@ -23,7 +23,7 @@ Use this file when turning a vague character idea into a stable `plan.json`.
 | `style` | no | Art direction. Default should be flat/vector desktop-pet style. |
 | `baseSize` | no | Size written to `pet.config.js`. Usually 72–110. |
 | `quotes` | no | Speech bubble lines. Keep each line short. |
-| `reuse_idol` | no | Reuse `raw/_idol.png` during iteration. |
+| `reuse_idol` | no | Reuse the cached idol reference at `<out>/idol.png` (and its raw original at `<out>/raw/idol.png`) during iteration. |
 | `reuse_existing` | no | Skip finished PNG files during iteration. |
 
 ## Good descriptions
@@ -101,4 +101,10 @@ Avoid:
 
 ## Chroma key note
 
-The generator asks Gemini to draw on `#78C878` and removes pixels near that color. If the character is green, change `KEY_COLOR` and `KEY_HEX` in `scripts/generate_sprites.py` to a color the character does not use.
+The generator asks Gemini to draw on `#78C878` and removes pixels near that color. Keying uses a **smooth alpha gradient** (not a hard threshold) so anti-aliased edges fade out cleanly instead of leaving a green halo:
+
+- pixels within `PET_RESKIN_KEY_INNER` (default 30) of `#78C878` → fully transparent
+- pixels beyond `PET_RESKIN_KEY_OUTER` (default 120) → fully opaque
+- in between → linear alpha gradient, plus a despill pass that suppresses residual green in edge pixels
+
+If the character itself is green, change `KEY_COLOR` and `KEY_HEX` in `scripts/generate_sprites.py` to a color the character does not use.

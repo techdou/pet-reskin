@@ -31,12 +31,25 @@ except ImportError:
     print("ERROR: Pillow is required. Install with: pip install Pillow", file=sys.stderr)
     sys.exit(2)
 
+try:
+    import numpy as np
+except ImportError:
+    print("ERROR: numpy is required. Install with: pip install numpy", file=sys.stderr)
+    sys.exit(2)
+
 DEFAULT_MODEL_ID = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 IMAGE_SIZE = os.environ.get("GEMINI_IMAGE_SIZE", "1K")
 KEY_COLOR = (120, 200, 120)
 KEY_HEX = "#78C878"
-KEY_TOLERANCE = int(os.environ.get("PET_RESKIN_KEY_TOLERANCE", "42"))
+# 不透明→全透明的过渡区间宽度（按到 KEY_COLOR 的棋盘距离计）。
+# 小于 INNER 的像素判为纯背景（alpha=0）；大于 OUTER 的判为角色（alpha=255）；
+# 介于两者之间的过渡（抗锯齿边缘）按距离线性渐变，消除硬阈值造成的绿边。
+KEY_INNER = int(os.environ.get("PET_RESKIN_KEY_INNER", "30"))
+KEY_OUTER = int(os.environ.get("PET_RESKIN_KEY_OUTER", "120"))
+# 防止 OUTER<=INNER 造成除零；强制至少留 10 的渐变带。
+if KEY_OUTER <= KEY_INNER:
+    KEY_OUTER = KEY_INNER + 10
 
 BASE_SPRITES: List[Dict[str, Any]] = [
     {"frame": "idle",       "file": "idle.png",         "role": "idle",         "needs_ref": True},
@@ -273,21 +286,34 @@ def sprite_prompt(plan: Dict[str, Any], role: str) -> str:
 
 
 def chroma_key(src_bytes: bytes) -> bytes:
+    """抠图：纯色背景转透明，抗锯齿边缘 alpha 平滑渐变，并去溢出绿色。
+
+    旧实现用硬阈值二值化（abs(ch-KEY)<=TOL 才判为背景），抗锯齿过渡像素既不
+    纯背景也不纯角色，会被判为不透明，导致角色轮廓残留一圈绿色"绿边"。新版：
+    1. 按到 KEY_COLOR 的棋盘距离计算 alpha——纯背景=0，角色=255，中间线性渐变；
+    2. 对过渡像素做去溢色（despill）：把 G 通道压到不超过 R/B 的最大值 + 容差，
+       消除半透明边缘里残留的背景绿色调。
+    """
     image = Image.open(io.BytesIO(src_bytes)).convert("RGB")
-    width, height = image.size
-    source = image.load()
-    output = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    target = output.load()
-    kr, kg, kb = KEY_COLOR
-    for y in range(height):
-        for x in range(width):
-            r, g, b = source[x, y]
-            if abs(r - kr) <= KEY_TOLERANCE and abs(g - kg) <= KEY_TOLERANCE and abs(b - kb) <= KEY_TOLERANCE:
-                continue
-            target[x, y] = (r, g, b, 255)
-    buffer = io.BytesIO()
-    output.save(buffer, format="PNG")
-    return buffer.getvalue()
+    arr = np.asarray(image, dtype=np.float32)
+    key = np.array(KEY_COLOR, dtype=np.float32)
+    # 棋盘距离：max(|R-kr|, |G-kg|, |B-kb|)
+    dist = np.max(np.abs(arr - key), axis=2)
+    # alpha 渐变：<=INNER 全透明，>=OUTER 全不透明，中间线性插值。
+    alpha = np.clip((dist - KEY_INNER) / (KEY_OUTER - KEY_INNER), 0.0, 1.0) * 255.0
+    alpha = alpha.astype(np.uint8)
+
+    # 去溢色：对带透明的边缘像素压制 G 通道，避免绿调残留。
+    green_excess = arr[:, :, 1] - np.maximum(arr[:, :, 0], arr[:, :, 2]) - 5.0
+    mask = green_excess > 0
+    arr[:, :, 1] = np.where(mask, arr[:, :, 1] - green_excess, arr[:, :, 1])
+    arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+    rgba = np.dstack([arr, alpha])
+    Image.fromarray(rgba, "RGBA").save(
+        (buf := io.BytesIO()), format="PNG"
+    )
+    return buf.getvalue()
 
 
 def write_manifest(
@@ -364,6 +390,8 @@ def run(
     else:
         print("▶ Generating idol reference…")
         idol_bytes = extract_image_bytes(call_gemini(api_key, model_id, [{"text": idol_prompt(plan)}]))
+        # 保留未抠图原图到 raw/，便于排查背景/抠图问题（与 sprite 行为一致）
+        (out_dir / "raw" / "idol.png").write_bytes(idol_bytes)
         idol_path.write_bytes(idol_bytes)
         print(f"  ✓ {idol_path}")
 
@@ -396,17 +424,21 @@ def run(
     print(f"\n✅ Generated {len(results)}/{len(selected)} requested sprites → {out_dir}")
     print(f"   manifest: {out_dir / 'manifest.json'}")
 
-    if strict and not only and manifest["missingRequiredFrames"]:
-        print(
-            f"ERROR: strict mode requires all 8 core frames. Missing: {', '.join(manifest['missingRequiredFrames'])}",
-            file=sys.stderr,
-        )
-        return 1
-    if strict and failures:
-        missing = manifest["missingFrames"]
-        label = ", ".join(missing) if missing else "one or more requested frames"
-        print(f"ERROR: strict mode detected generation failures. Missing/failed: {label}", file=sys.stderr)
-        return 1
+    # strict 模式只在"全量生成"（非 --only 修复）时校验完整性。
+    # --only 是修复单帧，manifest 天然残缺，不该因缺其他必需帧失败。
+    if strict and not only:
+        if manifest["missingRequiredFrames"]:
+            print(
+                f"ERROR: strict mode requires all 8 core frames. Missing: {', '.join(manifest['missingRequiredFrames'])}",
+                file=sys.stderr,
+            )
+            return 1
+        # 非必需帧（如可选 cloud）失败不算 strict 失败，只在 failures 里记录。
+        failed_required = [f for f in failures if f["frame"] in BASE_REQUIRED_FRAMES]
+        if failed_required:
+            names = ", ".join(f["frame"] for f in failed_required)
+            print(f"ERROR: strict mode detected failures on required frames: {names}", file=sys.stderr)
+            return 1
     return 0
 
 

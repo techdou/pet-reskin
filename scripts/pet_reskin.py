@@ -34,7 +34,7 @@ def main() -> None:
     args = parser.parse_args()
 
     py = sys.executable
-    run_step("preflight", [py, str(SCRIPT_DIR / "check_env.py"), "--target", str(args.target)])
+    run_step("preflight", [py, str(SCRIPT_DIR / "check_env.py"), "--target", str(args.target), "--probe"])
 
     generate_cmd = [py, str(SCRIPT_DIR / "generate_sprites.py"), "--skill-plan", str(args.plan), "--out", str(args.out)]
     if args.model:

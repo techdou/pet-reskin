@@ -8,7 +8,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from PIL import Image
@@ -70,8 +70,42 @@ def check_png(path: Path) -> Dict[str, Any]:
     return result
 
 
+def _extract_frames_body(text: str) -> Optional[str]:
+    """提取 `frames: { ... }` 花括号内部，找不到返回 None。与 apply_config 同款平衡扫描。"""
+    start_match = re.search(r"frames\s*:\s*\{", text)
+    if not start_match:
+        return None
+    brace_start = start_match.end() - 1
+    depth = 0
+    in_str: Optional[str] = None
+    i = brace_start
+    while i < len(text):
+        ch = text[i]
+        if in_str:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == in_str:
+                in_str = None
+        else:
+            if ch in ("'", '"'):
+                in_str = ch
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[brace_start + 1:i]
+        i += 1
+    return None
+
+
 def parse_frame_keys_from_config(text: str) -> List[str]:
-    keys = sorted(set(re.findall(r"\b([A-Za-z_]\w*)\s*:", text)))
+    """只从 `frames: {...}` 块内部提取已知帧键，避免抓到注释/字符串里的伪键。"""
+    body = _extract_frames_body(text)
+    if body is None:
+        return []
+    keys = sorted(set(re.findall(r"\b([A-Za-z_]\w*)\s*:", body)))
     return [key for key in keys if key in ALL_KNOWN_FRAMES]
 
 

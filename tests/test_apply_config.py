@@ -96,6 +96,45 @@ class ApplyConfigTests(unittest.TestCase):
             self.assertIn("baseSize: 88", config_text)
             self.assertIn("cloud: \"./assets/pet/old-cloud.png\"", config_text)
 
+    def test_balance_scanner_handles_braces_and_brackets_in_string_values(self):
+        """frames 路径含 }、quotes 金句含 ] 时，平衡扫描不该误截断。"""
+        config_text = (
+            "export default {\n"
+            "  baseSize: 72,\n"
+            "  frames: {\n"
+            "    idle: \"./a}.png\",\n"
+            "    cloud: \"./c.png\",\n"
+            "  },\n"
+            "  quotes: ['金句含 ] 方括号', '第二条'],\n"
+            "}\n"
+        )
+        manifest = sample_manifest(include_cloud=False)
+        updated, warnings = apply_config.update_config_text(config_text, manifest, {})
+        self.assertEqual(warnings, [])
+        # frames 替换后仍含 } 字符的路径（说明没被误截断）
+        self.assertIn("./assets/pet/idle.png", updated)
+        # quotes 替换后应是 manifest 的新金句，旧金句消失
+        self.assertIn("新金句一", updated)
+        self.assertNotIn("金句含 ] 方括号", updated)
+
+    def test_parse_existing_frames_ignores_non_frames_keys(self):
+        """parse_existing_frames 只读 frames 块，不抓 baseSize/quotes 等其他键。"""
+        config_text = (
+            "export default {\n"
+            "  baseSize: 72,\n"
+            "  frames: {\n"
+            "    idle: './a.png',\n"
+            "    sleep: './b.png',\n"
+            "  },\n"
+            "  quotes: ['x'],\n"
+            "}\n"
+        )
+        frames = apply_config.parse_existing_frames(config_text)
+        self.assertIn("idle", frames)
+        self.assertIn("sleep", frames)
+        self.assertNotIn("baseSize", frames)
+        self.assertNotIn("quotes", frames)
+
 
 if __name__ == "__main__":
     unittest.main()
