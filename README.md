@@ -206,7 +206,7 @@ The manifest records `failures`, `missingFrames`, and `missingRequiredFrames`. S
 
 ### Green halo / residue around the character
 
-Chroma keying uses a smooth alpha gradient (not a hard cutoff) plus a despill pass, so anti-aliased edges fade cleanly. If you still see a green halo, tune the gradient via `PET_RESKIN_KEY_INNER` (default 30, below = fully transparent) and `PET_RESKIN_KEY_OUTER` (default 120, above = fully opaque). If the character itself is green, change `KEY_COLOR` and `KEY_HEX` in `generate_sprites.py` to a color the character does not use.
+Chroma keying uses a smooth alpha gradient (not a hard cutoff) plus a despill pass, so anti-aliased edges fade cleanly. If the character itself is green-ish, the script detects the color collision automatically after generating the idol and stops before wasting the 8 sprite calls — set `"keyColor"` in `plan.json` to a contrasting color the character does not use (e.g. `#FF00FF` magenta for green characters) and rerun.
 
 ### `pet.config.js` cannot be replaced
 

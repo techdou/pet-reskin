@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.1
+
+### Added
+
+- `plan.keyColor` field (`#RRGGBB`) to override the chroma-key background color per character.
+- Automatic color-collision detection: after the idol is generated, the script checks whether too many character pixels fall inside the chroma-key gradient band and stops with actionable advice before wasting the 8 sprite API calls.
+- `manifest.json` now records the resolved `keyColor`.
+- Unit tests for collision detection, custom keyColor, parameterized chroma_key, and hex parsing.
+
+### Changed
+
+- `chroma_key` now takes the key color as a parameter instead of reading module-level globals; prompt builders thread the key hex through so the model is told the correct background color.
+- Despill is now channel-agnostic: it suppresses whichever channel dominates the key color (green/red/blue), so non-green key colors still get clean edges.
+- Removed the `PET_RESKIN_KEY_INNER` / `PET_RESKIN_KEY_OUTER` environment variables. The gradient band is fixed (30–120) because edge anti-aliasing width is model-intrinsic; tuning thresholds could not save a true color collision anyway.
+
 ## 1.3.0
 
 ### Added

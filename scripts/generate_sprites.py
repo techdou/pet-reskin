@@ -40,16 +40,18 @@ except ImportError:
 DEFAULT_MODEL_ID = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 IMAGE_SIZE = os.environ.get("GEMINI_IMAGE_SIZE", "1K")
-KEY_COLOR = (120, 200, 120)
-KEY_HEX = "#78C878"
-# 不透明→全透明的过渡区间宽度（按到 KEY_COLOR 的棋盘距离计）。
+
+# 抠图默认参数。keyColor 走 plan 字段覆盖（见 resolve_key_color），不再用环境变量调。
+DEFAULT_KEY_RGB = (120, 200, 120)   # #78C878
+DEFAULT_KEY_HEX = "#78C878"
+# alpha 渐变区间（按到 keyColor 的棋盘距离计）。写死，不暴露给用户调。
 # 小于 INNER 的像素判为纯背景（alpha=0）；大于 OUTER 的判为角色（alpha=255）；
-# 介于两者之间的过渡（抗锯齿边缘）按距离线性渐变，消除硬阈值造成的绿边。
-KEY_INNER = int(os.environ.get("PET_RESKIN_KEY_INNER", "30"))
-KEY_OUTER = int(os.environ.get("PET_RESKIN_KEY_OUTER", "120"))
-# 防止 OUTER<=INNER 造成除零；强制至少留 10 的渐变带。
-if KEY_OUTER <= KEY_INNER:
-    KEY_OUTER = KEY_INNER + 10
+# 介于两者之间（抗锯齿边缘）按距离线性渐变。
+KEY_INNER = 30
+KEY_OUTER = 120
+# 撞色诊断：角色主体若有超过该比例的像素落入 keyColor 的渐变带（INNER..OUTER），
+# 判定为撞色——此时调阈值救不回来，必须换 keyColor。
+COLLISION_RATIO_THRESHOLD = 0.15
 
 BASE_SPRITES: List[Dict[str, Any]] = [
     {"frame": "idle",       "file": "idle.png",         "role": "idle",         "needs_ref": True},
@@ -193,9 +195,9 @@ def compact_prompt(sections: Dict[str, Iterable[str] | str]) -> str:
     return "\n\n".join(blocks)
 
 
-def common_output_constraints() -> List[str]:
+def common_output_constraints(key_hex: str) -> List[str]:
     return [
-        f"Use a single flat chroma-key green background: {KEY_HEX}.",
+        f"Use a single flat chroma-key background: {key_hex}.",
         "Keep the background perfectly solid and uniform, with no gradient, texture, scenery, floor, or shadow.",
         "Leave a small transparent-safe margin around the subject after background removal.",
         "Do not add text, captions, UI elements, watermarks, logos, duplicate characters, extra props, or extra objects.",
@@ -203,7 +205,7 @@ def common_output_constraints() -> List[str]:
     ]
 
 
-def idol_prompt(plan: Dict[str, Any]) -> str:
+def idol_prompt(plan: Dict[str, Any], key_hex: str) -> str:
     return compact_prompt({
         "Task": "Create a production-ready master reference image for a web desktop pet sprite. This is a character reference asset, not a scene illustration.",
         "Subject": [
@@ -221,7 +223,7 @@ def idol_prompt(plan: Dict[str, Any]) -> str:
             "Neutral relaxed standing pose, head looking toward the viewer.",
             "Clean silhouette; avoid tiny fragile details that will disappear when scaled down.",
         ],
-        "Output constraints": common_output_constraints(),
+        "Output constraints": common_output_constraints(key_hex),
     })
 
 
@@ -240,7 +242,7 @@ def sprite_pose(role: str) -> str:
     return poses[role]
 
 
-def cloud_prompt() -> str:
+def cloud_prompt(key_hex: str) -> str:
     return compact_prompt({
         "Task": "Create a production-ready helper cloud sprite for a web desktop pet UI.",
         "Subject": [
@@ -257,13 +259,13 @@ def cloud_prompt() -> str:
             "Fully visible with comfortable margins and no cropped edges.",
             "No character and no scene elements.",
         ],
-        "Output constraints": common_output_constraints(),
+        "Output constraints": common_output_constraints(key_hex),
     })
 
 
-def sprite_prompt(plan: Dict[str, Any], role: str) -> str:
+def sprite_prompt(plan: Dict[str, Any], role: str, key_hex: str) -> str:
     if role == "cloud":
-        return cloud_prompt()
+        return cloud_prompt(key_hex)
     return compact_prompt({
         "Task": "Create one frame for a consistent web desktop pet sprite animation, using the provided reference image as the identity source.",
         "Reference image usage": [
@@ -281,32 +283,106 @@ def sprite_prompt(plan: Dict[str, Any], role: str) -> str:
             "Full body visible, centered in a square canvas, fully inside the canvas, with consistent scale across frames.",
             "Clean silhouette suitable for animation; avoid motion blur, perspective distortion, and overly detailed textures.",
         ],
-        "Output constraints": common_output_constraints(),
+        "Output constraints": common_output_constraints(key_hex),
     })
 
 
-def chroma_key(src_bytes: bytes) -> bytes:
-    """抠图：纯色背景转透明，抗锯齿边缘 alpha 平滑渐变，并去溢出绿色。
+def hex_to_rgb(hex_str: str) -> Tuple[int, int, int]:
+    """'#78C878' 或 '78C878' → (120, 200, 120)。"""
+    h = hex_str.lstrip("#").strip()
+    if len(h) != 6:
+        raise ValueError(f"invalid hex color: {hex_str!r} (expected #RRGGBB)")
+    try:
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    except ValueError as exc:
+        raise ValueError(f"invalid hex color: {hex_str!r}") from exc
 
-    旧实现用硬阈值二值化（abs(ch-KEY)<=TOL 才判为背景），抗锯齿过渡像素既不
-    纯背景也不纯角色，会被判为不透明，导致角色轮廓残留一圈绿色"绿边"。新版：
-    1. 按到 KEY_COLOR 的棋盘距离计算 alpha——纯背景=0，角色=255，中间线性渐变；
-    2. 对过渡像素做去溢色（despill）：把 G 通道压到不超过 R/B 的最大值 + 容差，
-       消除半透明边缘里残留的背景绿色调。
+
+def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
+    return "#{:02X}{:02X}{:02X}".format(*rgb)
+
+
+def resolve_key_color(plan: Dict[str, Any]) -> Tuple[Tuple[int, int, int], str]:
+    """从 plan.keyColor 解析抠图背景色，默认 #78C878。返回 (rgb, hex)。"""
+    raw = plan.get("keyColor")
+    if not raw:
+        return DEFAULT_KEY_RGB, DEFAULT_KEY_HEX
+    try:
+        rgb = hex_to_rgb(str(raw))
+        return rgb, rgb_to_hex(rgb)
+    except ValueError as exc:
+        raise SystemExit(f"ERROR: plan.keyColor {exc}") from exc
+
+
+def detect_color_collision(idol_bytes: bytes, key_rgb: Tuple[int, int, int]) -> Dict[str, Any]:
+    r"""诊断角色主体是否与 keyColor 撞色（不可抠）。
+
+    思路：在 idol 图里，背景色像素（距离 keyColor <= INNER）应占相当比例。
+    把这些"明确是背景"的像素剔除后，剩下的是角色+抗锯齿边缘。如果这批角色像素中
+    又有大量落入渐变带（INNER..OUTER），说明角色颜色与背景色太接近，抠图会把
+    角色主体也挖半透明——此时调阈值救不回来，必须换 keyColor。
+
+    返回 {collision: bool, ratio: float, sample_pixel: (r,g,b)}。
+    """
+    image = Image.open(io.BytesIO(idol_bytes)).convert("RGB")
+    arr = np.asarray(image, dtype=np.float32)
+    key = np.array(key_rgb, dtype=np.float32)
+    dist = np.max(np.abs(arr - key), axis=2)
+    total = dist.size
+    # 角色+边缘像素 = 距离 > INNER 的所有非背景像素
+    non_bg_mask = dist > KEY_INNER
+    non_bg_count = int(non_bg_mask.sum())
+    if non_bg_count == 0:
+        # 整张图都是背景，无角色可判，不报撞色
+        return {"collision": False, "ratio": 0.0, "sample_pixel": None}
+    # 落入渐变带的像素（INNER < dist <= OUTER）= 与背景色接近、会被抠半透明的危险像素
+    danger_mask = (dist > KEY_INNER) & (dist <= KEY_OUTER)
+    danger_count = int(danger_mask.sum())
+    ratio = danger_count / non_bg_count
+    collision = ratio > COLLISION_RATIO_THRESHOLD
+    # 取一个最危险的像素作为样本，给用户参考
+    sample = None
+    if collision:
+        danger_pixels = arr[danger_mask]
+        # 离 keyColor 最近的那批像素里取中间值作样本
+        sample_idx = np.argsort(dist[danger_mask])[len(danger_pixels) // 2]
+        sample = tuple(int(v) for v in danger_pixels[sample_idx])
+    return {"collision": collision, "ratio": float(ratio), "sample_pixel": sample}
+
+
+def chroma_key(src_bytes: bytes, key_rgb: Tuple[int, int, int]) -> bytes:
+    """抠图：纯色背景转透明，抗锯齿边缘 alpha 平滑渐变，并去溢色。
+
+    参数 key_rgb 由 plan.keyColor 决定（默认 #78C878），角色偏绿等撞色场景应在
+    plan 里换一个角色不用的对比色。渐变区间写死（INNER=30, OUTER=120），因为：
+    抗锯齿过渡带宽度是图像生成固有的，与角色颜色无关；真正影响抠图质量的是 keyColor
+    选择，而非阈值。撞色靠 detect_color_collision 提前发现并提示换色，不靠调阈值。
+
+    去溢色（despill）针对 key_rgb 偏绿的情况：把 G 通道压到不超过 R/B 的最大值+容差，
+    消除半透明边缘残留的背景色调。换 keyColor 后该逻辑仍按 key_rgb 自适应。
     """
     image = Image.open(io.BytesIO(src_bytes)).convert("RGB")
     arr = np.asarray(image, dtype=np.float32)
-    key = np.array(KEY_COLOR, dtype=np.float32)
+    key = np.array(key_rgb, dtype=np.float32)
     # 棋盘距离：max(|R-kr|, |G-kg|, |B-kb|)
     dist = np.max(np.abs(arr - key), axis=2)
     # alpha 渐变：<=INNER 全透明，>=OUTER 全不透明，中间线性插值。
     alpha = np.clip((dist - KEY_INNER) / (KEY_OUTER - KEY_INNER), 0.0, 1.0) * 255.0
     alpha = alpha.astype(np.uint8)
 
-    # 去溢色：对带透明的边缘像素压制 G 通道，避免绿调残留。
-    green_excess = arr[:, :, 1] - np.maximum(arr[:, :, 0], arr[:, :, 2]) - 5.0
-    mask = green_excess > 0
-    arr[:, :, 1] = np.where(mask, arr[:, :, 1] - green_excess, arr[:, :, 1])
+    # 去溢色：压制与 key_rgb 主导通道同色的溢出。计算每个像素相对 key_rgb 的主导通道。
+    # 对绿色背景压 G 通道；换色后自动改为压对应通道。
+    kr, kg, kb = key_rgb
+    if kg >= kr and kg >= kb:  # 背景偏绿
+        channel = 1
+    elif kr >= kg and kr >= kb:  # 背景偏红
+        channel = 0
+    else:  # 背景偏蓝
+        channel = 2
+    others = [i for i in range(3) if i != channel]
+    excess = arr[:, :, channel] - np.maximum(arr[:, :, others[0]], arr[:, :, others[1]]) - 5.0
+    mask = excess > 0
+    arr[:, :, channel] = np.where(mask, arr[:, :, channel] - excess, arr[:, :, channel])
     arr = np.clip(arr, 0, 255).astype(np.uint8)
 
     rgba = np.dstack([arr, alpha])
@@ -336,6 +412,7 @@ def write_manifest(
         "baseSize": plan.get("baseSize"),
         "quotes": plan.get("quotes", []),
         "generateCloud": bool(plan.get("generateCloud")),
+        "keyColor": plan.get("keyColor", DEFAULT_KEY_HEX),
         "requiredFrames": required_frames,
         "optionalFrames": optional_frames,
         "requestedFrames": requested_frames,
@@ -361,11 +438,13 @@ def run(
     plan = load_plan(plan_path)
     plan["generateCloud"] = resolve_generate_cloud(plan, cloud_override)
     selected = resolve_sprite_list(plan, only, cloud_override)
+    key_rgb, key_hex = resolve_key_color(plan)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "raw").mkdir(exist_ok=True)
     shutil.copy2(plan_path, out_dir / "plan.json")
-    # Ensure copied plan reflects CLI cloud override when used.
+    # Ensure copied plan reflects CLI cloud override and resolved keyColor when used.
+    plan["keyColor"] = key_hex
     (out_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     if dry_run:
@@ -374,6 +453,7 @@ def run(
             "dryRun": True,
             "plan": plan,
             "model": model_id,
+            "keyColor": key_hex,
             "selectedSprites": [sp["frame"] for sp in selected],
             "requiredFrames": BASE_REQUIRED_FRAMES,
             "optionalFrames": OPTIONAL_FRAME_NAMES,
@@ -389,11 +469,28 @@ def run(
         print(f"✓ Reusing idol reference: {idol_path}")
     else:
         print("▶ Generating idol reference…")
-        idol_bytes = extract_image_bytes(call_gemini(api_key, model_id, [{"text": idol_prompt(plan)}]))
+        idol_bytes = extract_image_bytes(call_gemini(api_key, model_id, [{"text": idol_prompt(plan, key_hex)}]))
         # 保留未抠图原图到 raw/，便于排查背景/抠图问题（与 sprite 行为一致）
         (out_dir / "raw" / "idol.png").write_bytes(idol_bytes)
         idol_path.write_bytes(idol_bytes)
         print(f"  ✓ {idol_path}")
+
+    # 撞色诊断：用 idol（含背景）检查角色主体是否与 keyColor 太接近。
+    # 在生成 8 张图之前做，避免撞色后整批返工。reuse_idol 复用旧 idol 时也检查，
+    # 因为换了 keyColor 的旧 idol 仍可能撞色。
+    diag = detect_color_collision(idol_bytes, key_rgb)
+    if diag["collision"]:
+        sample = diag.get("sample_pixel")
+        sample_str = f"（角色样本色 RGB{sample}）" if sample else ""
+        print(
+            f"\nERROR: 角色与抠图背景色 {key_hex} 撞色{sample_str}。\n"
+            f"  约 {diag['ratio']*100:.0f}% 的角色像素落入抠图渐变带，会被误抠半透明。\n"
+            f"  调阈值救不回来——请在 plan.json 里设 \"keyColor\" 为角色不用的对比色再重跑。\n"
+            f"  例：偏绿角色用 \"#FF00FF\"（品红）、偏红角色用 \"#00FFFF\"（青）、"
+            f"偏蓝角色用 \"#FFFF00\"（黄）。",
+            file=sys.stderr,
+        )
+        return 1
 
     idol_part = {"inline_data": {"mime_type": "image/png", "data": base64.b64encode(idol_bytes).decode("ascii")}}
     results: List[Dict[str, Any]] = []
@@ -405,14 +502,14 @@ def run(
             print(f"✓ Reusing existing sprite: {sp['file']}")
             results.append(sp)
             continue
-        parts = [{"text": sprite_prompt(plan, sp["role"])}]
+        parts = [{"text": sprite_prompt(plan, sp["role"], key_hex)}]
         if sp["needs_ref"]:
             parts.append(idol_part)
         print(f"▶ Generating {sp['file']} ({sp['role']})…")
         try:
             raw = extract_image_bytes(call_gemini(api_key, model_id, parts))
             (out_dir / "raw" / sp["file"]).write_bytes(raw)
-            dest.write_bytes(chroma_key(raw))
+            dest.write_bytes(chroma_key(raw, key_rgb))
             print(f"  ✓ {dest}")
             results.append(sp)
         except Exception as exc:
