@@ -1,18 +1,60 @@
-# OS
+# ── 操作系统杂项 ──
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Python
+# ── 编辑器 / IDE 配置目录（开发软件配置不上传）──
+.vscode/
+.idea/
+.zed/
+.zcode/
+.fleet/
+*.swp
+*.swo
+*~
+
+# ── 密钥与本地环境变量（绝不入库）──
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# ── Python 构建与缓存产物 ──
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
 
-# 生成产物（不入库）
+# ── 虚拟环境 ──
+.venv/
+venv/
+env/
+ENV/
+
+# ── 生成产物（skill 运行时产生，不入库）──
 sprites/
 raw/
 plan.json
 manifest.json
+validation-report.json
+postprocess-report.json
 
-# 环境与编辑器
-.env
-.vscode/
-.idea/
+# ── 类型检查 / lint 缓存 ──
+.mypy_cache/
+.ruff_cache/
+.pyre/
