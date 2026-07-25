@@ -1,0 +1,46 @@
+{
+  "schema": "pet-reskin.frame-templates.v1",
+  "templates": {
+    "base8": {
+      "description": "基础 8 帧（canvas-pet 经典配置，向后兼容）",
+      "frames": [
+        {"frame": "idle",       "file": "idle.png",         "role": "idle",         "needsRef": true,  "pose": "front view, standing still, relaxed neutral pose"},
+        {"frame": "idleWink",   "file": "idle-wink.png",    "role": "wink",         "needsRef": true,  "pose": "front view, standing still, one eye closed in a friendly wink, otherwise matching the idle pose"},
+        {"frame": "walkFront1", "file": "walk-front-1.png", "role": "walk_front_1", "needsRef": true,  "pose": "front view, walking toward the viewer, mid-stride, left leg forward"},
+        {"frame": "walkFront2", "file": "walk-front-2.png", "role": "walk_front_2", "needsRef": true,  "pose": "front view, walking toward the viewer, mid-stride, right leg forward, alternate step from walk_front_1"},
+        {"frame": "walkLeft",   "file": "walk-left-1.png",  "role": "walk_left",    "needsRef": true,  "pose": "side profile, walking to the left, the character clearly faces left, mid-stride"},
+        {"frame": "walkRight",  "file": "walk-right-1.png", "role": "walk_right",   "needsRef": true,  "pose": "side profile, walking to the right, the character clearly faces right, mid-stride"},
+        {"frame": "walkBack",   "file": "walk-back-1.png",  "role": "walk_back",    "needsRef": true,  "pose": "back view, walking away from the viewer, mid-stride"},
+        {"frame": "sleep",      "file": "sleep.png",        "role": "sleep",        "needsRef": true,  "pose": "sleeping peacefully, eyes closed, curled up or resting in a compact pose"}
+      ]
+    },
+    "extended16": {
+      "description": "扩展 16 帧（含 idle 变体、walk 2 帧循环、sleep 2 帧、互动帧）",
+      "frames": [
+        {"frame": "idle",       "file": "idle.png",         "role": "idle",         "needsRef": true,  "pose": "front view, standing still, relaxed neutral pose"},
+        {"frame": "idleWink",   "file": "idle-wink.png",    "role": "wink",         "needsRef": true,  "pose": "front view, standing still, one eye closed in a friendly wink"},
+        {"frame": "idleThink",  "file": "idle-think.png",   "role": "idle_think",   "needsRef": true,  "pose": "standing still, thinking pose, one hand raised to chin, head tilted, eyes looking up-and-to-the-side"},
+        {"frame": "idleLook",   "file": "idle-look.png",    "role": "idle_look",    "needsRef": true,  "pose": "standing still, head turned to look to the side, eyes gazing sideways, body mostly forward"},
+        {"frame": "walkFront1", "file": "walk-front-1.png", "role": "walk_front_1", "needsRef": true,  "pose": "front view, walking toward viewer, mid-stride, left leg forward"},
+        {"frame": "walkFront2", "file": "walk-front-2.png", "role": "walk_front_2", "needsRef": true,  "pose": "front view, walking toward viewer, mid-stride, right leg forward (opposite phase of walk_front_1)"},
+        {"frame": "walkLeft1",  "file": "walk-left-1.png",  "role": "walk_left_1",  "needsRef": true,  "pose": "side profile facing left, walking left, mid-stride"},
+        {"frame": "walkLeft2",  "file": "walk-left-2.png",  "role": "walk_left_2",  "needsRef": true,  "pose": "side profile facing left, walking left, opposite leg forward (frame 2 of walk loop)"},
+        {"frame": "walkRight1", "file": "walk-right-1.png", "role": "walk_right_1", "needsRef": true,  "pose": "side profile facing right, walking right, mid-stride"},
+        {"frame": "walkRight2", "file": "walk-right-2.png", "role": "walk_right_2", "needsRef": true,  "pose": "side profile facing right, walking right, opposite leg forward (frame 2 of walk loop)"},
+        {"frame": "walkBack1",  "file": "walk-back-1.png",  "role": "walk_back_1",  "needsRef": true,  "pose": "back view, walking away from viewer, mid-stride"},
+        {"frame": "walkBack2",  "file": "walk-back-2.png",  "role": "walk_back_2",  "needsRef": true,  "pose": "back view, walking away, opposite leg forward (frame 2 of walk loop)"},
+        {"frame": "sleep",      "file": "sleep.png",        "role": "sleep",        "needsRef": true,  "pose": "sleeping peacefully, eyes closed as curved arcs, curled up or sitting with head nodding"},
+        {"frame": "sleep2",     "file": "sleep-2.png",      "role": "sleep_2",      "needsRef": true,  "pose": "sleeping, slight position shift from sleep frame suggesting breathing motion"},
+        {"frame": "wave",       "file": "wave.png",         "role": "wave",         "needsRef": true,  "pose": "waving a friendly greeting, one hand raised beside head, palm forward, warm smile"},
+        {"frame": "happy",      "file": "happy.png",        "role": "happy",        "needsRef": true,  "pose": "jumping for joy mid-air, both arms raised, big bright smile, legs bent in joyful hop"}
+      ]
+    }
+  },
+  "cloudFrame": {
+    "frame": "cloud",
+    "file": "cloud.png",
+    "role": "cloud",
+    "needsRef": false,
+    "pose": "a soft fluffy white cloud, viewed from slightly above, simple isolated helper asset"
+  }
+}

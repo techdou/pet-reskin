@@ -117,3 +117,66 @@ Avoid:
 | 紫色系 | `#FFFF00` 黄 |
 
 改了 `keyColor` 后，生成器会要求模型用新背景色作画，抠图、去溢色、撞色诊断都自动按新颜色走，无需改代码。
+
+## v2.0 新字段
+
+### Provider 选择
+
+```json
+{
+  "provider": "image2api",
+  "background": "white"
+}
+```
+
+- `provider`: `"gemini"`（默认，用 GEMINI_API_KEY）| `"image2api"`（封装 image2-api skill，gpt-image-2 + 8 provider fallback）
+- `background`: `"chroma"`（默认，绿底抠图）| `"white"`（白底后处理抠图，适配 gpt-image-2 不支持透明输出的限制）
+
+image2api 模式需要安装 image2-api skill（`~/.agents/skills/image2-api` 或 `IMAGE2_API_ROOT` 环境变量）。
+
+### 帧清单配置
+
+```json
+{
+  "frameSet": "extended16"
+}
+```
+
+或完全自定义：
+
+```json
+{
+  "frames": [
+    {"frame": "idle", "file": "idle.png", "role": "idle", "pose": "front view, standing still"},
+    {"frame": "jump", "file": "jump.png", "role": "jump", "pose": "mid-air jump, arms up"}
+  ]
+}
+```
+
+内置模板见 `assets/frame-templates.json`（base8 / extended16）。
+
+### 参考图直用
+
+```json
+{
+  "referenceImage": "./assets/model/小豆-cutout.png",
+  "referenceAsIdle": true
+}
+```
+
+- `referenceImage`: 已有参考图路径（相对 plan.json 目录）。有则跳过 idol 生成，所有 sprite 帧用它作 reference（走 edit API，锁定角色一致性）。
+- `referenceAsIdle`: true 时直接把参考图当 idle 帧（再省 1 次调用）。适合已经有完美 idle 姿态的抠图。
+
+### 多皮肤项目专用
+
+```json
+{
+  "skinId": "xiaodou",
+  "skinName": "小豆",
+  "startXRatio": 0.5,
+  "idleVariants": ["idle-think", "idle-look"],
+  "idleEvents": [{"frame": "wave", "chance": 0.15, "duration": 1800}]
+}
+```
+
+这些字段写入 multi-skin 项目 pet.js 的新 skin 对象。canvas-pet 项目忽略它们。

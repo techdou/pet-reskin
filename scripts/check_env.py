@@ -60,10 +60,49 @@ def check(target: Path | None, probe: bool = False) -> Dict[str, Any]:
     # GEMINI_IMAGE_MODEL 是提示性信息（可选覆盖），不参与 ok 判定
     add_info("GEMINI_IMAGE_MODEL", os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3-pro-image (default)"))
 
+    # image2-api skill 可用性（provider=image2api 时需要）
+    image2api_root = None
+    for candidate in [
+        Path.home() / ".agents" / "skills" / "image2-api",
+        Path.home() / ".zcode" / "skills" / "image2-api",
+    ]:
+        if (candidate / "scripts" / "image2lib" / "__init__.py").exists():
+            image2api_root = candidate
+            break
+    if image2api_root:
+        add_info("image2-api skill", f"found at {image2api_root} (provider=image2api 可用)")
+    elif os.environ.get("IMAGE2_API_ROOT"):
+        root = Path(os.environ["IMAGE2_API_ROOT"])
+        if (root / "scripts" / "image2lib" / "__init__.py").exists():
+            add_info("image2-api skill", f"found via IMAGE2_API_ROOT at {root}")
+        else:
+            add_info("image2-api skill", "IMAGE2_API_ROOT set but image2lib not found there")
+    else:
+        add_info("image2-api skill", "not found (provider=image2api 不可用，将走 gemini 默认)")
+
     if target is not None:
         add("target exists", target.exists(), str(target))
-        add("target pet.config.js", (target / "pet.config.js").exists(), str(target / "pet.config.js"))
-        add("target assets/pet", (target / "assets" / "pet").exists(), str(target / "assets" / "pet"))
+        # 探测 target 类型：canvas-pet（pet.config.js）或 multi-skin（pet.js skins 数组）
+        config_js = target / "pet.config.js"
+        pet_js = target / "pet.js"
+        has_config_js = config_js.exists()
+        has_pet_js_skins = False
+        if pet_js.exists():
+            try:
+                text = pet_js.read_text(encoding="utf-8")
+                has_pet_js_skins = "skins" in text and ("PET_CONFIG" in text or "skins:" in text)
+            except Exception:
+                pass
+
+        if has_config_js:
+            add("target type", True, "canvas_pet (pet.config.js)")
+            add("target pet.config.js", True, str(config_js))
+            add("target assets/pet", (target / "assets" / "pet").exists(), str(target / "assets" / "pet"))
+        elif has_pet_js_skins:
+            add("target type", True, "multi_skin (pet.js skins array)")
+            add("target pet.js", True, str(pet_js))
+        else:
+            add("target type", False, "unknown — 既无 pet.config.js 也无含 skins 的 pet.js")
 
     # 可选：探测 key 是否被 API 接受，提前暴露 401/403，避免生成中途失败。
     if probe and key:

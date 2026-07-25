@@ -1,97 +1,121 @@
 ---
 name: pet-reskin
-description: Generate and install a complete canvas-pet/web desktop-pet reskin: 8 required transparent PNG sprite frames, plus an optional cloud.png helper asset, and safe pet.config.js updates. Use only when the user wants a full canvas-pet character skin or asks to replace/install sprites for a project that uses pet.config.js and assets/pet. Do not use for a single mascot image, logo, avatar, generic web-pet animation advice, or prompt-only illustration work.
+description: Generate and install a complete canvas-pet / multi-skin web desktop-pet character. Supports two project architectures (single-skin canvas-pet with pet.config.js, multi-skin with pet.js skins array), two image providers (Gemini, image2-api with gpt-image-2), configurable frame sets (base8 / extended16 / custom), and reference-image reuse. Use when the user wants a full pet sprite set generated, replaced, or installed. Do not use for single mascot image, logo, avatar, or prompt-only illustration work.
 ---
 
 # pet-reskin
 
-Use this skill to turn a character idea into a complete, installable `canvas-pet` skin: 8 core PNG sprite frames, an optional `cloud.png`, a `manifest.json`, and a safe update to `pet.config.js`.
+Turn a character description into a complete, installable pet sprite set. Supports two architectures, two providers, and configurable frames.
 
-## Routing
+## When to use
 
-Use this skill when all are true:
-- The task is about `canvas-pet`, a web desktop pet, or a project with `pet.config.js` and `assets/pet/`.
-- The expected output is a full sprite set, not just one image.
+All true:
+- The task is about a web desktop pet (canvas-pet single-skin, or multi-skin pet.js project).
+- The expected output is a full sprite set, not a single image.
 - The user wants generation, replacement, installation, or validation of a pet skin.
 
-Do not use this skill when:
-- The user only wants a mascot illustration, logo, avatar, or image prompt.
-- The user asks how web-pet animation works in general.
-- The target uses a spritesheet atlas instead of separate PNG frames.
-- There is no canvas-pet-like project contract to update.
+Do not use for:
+- Single mascot illustration, logo, avatar, or image prompt.
+- Generic web-pet animation advice.
+- Projects using spritesheet atlases instead of separate PNG frames.
 
-## Required inputs
+## Target project types (auto-detected)
 
-- Character concept with visual identity. If vague, ask for up to three visual details before generation.
-- Target project root containing `pet.config.js` and usually `assets/pet/`.
-- `GEMINI_API_KEY` or `GOOGLE_API_KEY` in the environment.
-- Decide whether `cloud.png` should also be generated. Default is no.
+| Type | Marker | Installer |
+|---|---|---|
+| **canvas-pet** (single-skin) | `pet.config.js` with flat `frames` object | `installers/canvas_pet.py` |
+| **multi-skin** | `pet.js` with `PET_CONFIG.skins` array | `installers/multi_skin.py` |
+
+`check_env.py --target <root>` auto-detects. `apply_config.py` dispatches accordingly.
+
+## plan.json schema
+
+Required:
+- `character`: name/identity
+- `description`: visual identity (body shape, colors, features, expression, outfit)
+
+Optional (v2.0 additions):
+- `provider`: `"gemini"` (default) | `"image2api"` — image API. image2api wraps the image2-api skill (gpt-image-2 + 8-provider fallback).
+- `background`: `"chroma"` (default, green chroma-key) | `"white"` (white-bg post-processing, suits gpt-image-2)
+- `frameSet`: `"base8"` (default) | `"extended16"` | custom template name
+- `frames`: custom frame array (overrides frameSet). Each item: `{frame, file, role, pose}`
+- `referenceImage`: path to existing reference image (skips idol generation, used as identity source for all frames)
+- `referenceAsIdle`: bool — treat referenceImage as the idle frame directly (saves 2 API calls)
+- `skinId` / `skinName`: multi-skin installer uses these for the new skin's id/name
+- `startXRatio`, `idleVariants`, `idleEvents`: multi-skin extras written into the new skin object
+
+Legacy (still supported):
+- `style`, `baseSize`, `quotes`, `keyColor`, `generateCloud`, `reuse_idol`, `reuse_existing`
+
+See `assets/example-plan-*.json` for complete examples.
+
+## Frame templates
+
+`assets/frame-templates.json` ships two templates:
+
+- **base8** (default, backward compatible): idle / idleWink / walkFront1-2 / walkLeft / walkRight / walkBack / sleep
+- **extended16**: base8 + idleThink / idleLook / walkLeft2 / walkRight2 / walkBack2 / sleep2 / wave / happy
+
+Custom: set `plan.frames` to an array of `{frame, file, role, pose}` specs.
 
 ## Workflow
 
-1. Read `references/character-prompt-guide.md` when converting a vague user idea into `plan.json`. Read `references/image-prompt-style-guide.md` before changing prompt templates.
-2. Run preflight checks:
+1. Read `references/character-prompt-guide.md` for vague→plan conversion, `references/image-prompt-style-guide.md` for prompt structure.
+2. Preflight: `python scripts/check_env.py --target <root>` (auto-detects architecture, checks image2-api availability).
+3. Generate + install in one command:
    ```bash
-   python scripts/check_env.py --target <canvas-pet-root>
+   python scripts/pet_reskin.py --plan <plan.json> --target <root> --out <workdir>/sprites
    ```
-3. Generate and install in one command:
+4. Optional cloud helper: add `--with-cloud`.
+5. Manual steps if needed:
    ```bash
-   python scripts/pet_reskin.py --plan <plan.json> --target <canvas-pet-root> --out <workdir>/sprites
+   python scripts/generate_sprites.py --skill-plan plan.json --out sprites
+   python scripts/validate_output.py --manifest sprites/manifest.json --sprites sprites
+   python scripts/apply_config.py --manifest sprites/manifest.json --sprites sprites --target <root>
    ```
-4. To include the optional cloud helper asset:
-   ```bash
-   python scripts/pet_reskin.py --plan <plan.json> --target <canvas-pet-root> --out <workdir>/sprites --with-cloud
-   ```
-5. If using separate steps:
-   ```bash
-   python scripts/generate_sprites.py --skill-plan <plan.json> --out <workdir>/sprites
-   python scripts/validate_output.py --manifest <workdir>/sprites/manifest.json --sprites <workdir>/sprites
-   python scripts/apply_config.py --manifest <workdir>/sprites/manifest.json --sprites <workdir>/sprites --target <canvas-pet-root>
-   python scripts/validate_output.py --manifest <workdir>/sprites/manifest.json --sprites <workdir>/sprites --target <canvas-pet-root>
-   ```
+
+## Provider selection guide
+
+| Scenario | provider | background |
+|---|---|---|
+| Default / single Gemini key / canvas-pet classic | `gemini` (or omit) | `chroma` (or omit) |
+| Want gpt-image-2 + multi-provider fallback (more stable) | `image2api` | `white` |
+| Green character that collides with default chroma key | `gemini` | `chroma` + custom `keyColor: "#FF00FF"` |
+| Have an existing reference image (cutout.png) | either | `white` (gpt-image-2) or `chroma` (Gemini) |
 
 ## Output contract
 
-Generation must produce:
-- `plan.json` copied into the output directory.
-- `manifest.json` with `frames`, `files`, `quotes`, `baseSize`, `requiredFrames`, `optionalFrames`, `requestedFrames`, and failures if any.
-- These 8 required transparent PNGs: `idle.png`, `idle-wink.png`, `walk-front-1.png`, `walk-front-2.png`, `walk-left-1.png`, `walk-right-1.png`, `walk-back-1.png`, `sleep.png`.
-- Optional: `cloud.png` when requested.
+Generation produces (in `--out`):
+- `plan.json` (resolved copy)
+- `manifest.json` with `frames`, `files`, `quotes`, `baseSize`, `requiredFrames`, `optionalFrames`, `requestedFrames`, `failures`
+- Transparent PNGs (8 base / 16 extended / custom)
+- Optional `cloud.png`
+- `raw/` subdirectory with unprocessed originals
+- `idol.png` (only when no referenceImage; the master reference)
 
-Installation must:
-- Copy generated PNGs to `<target>/assets/pet/`.
-- Back up `<target>/pet.config.js` to `pet.config.js.bak` unless explicitly disabled.
-- Replace `frames`, `quotes`, and `baseSize` in `pet.config.js`.
-- Preserve an existing `cloud` frame if cloud generation was skipped.
-- Refuse partial installs by default.
+Installation:
+- **canvas-pet**: copies PNGs to `<target>/assets/pet/`, backs up + updates `pet.config.js` (`frames`/`quotes`/`baseSize`).
+- **multi-skin**: copies PNGs to `<target>/pet/assets/<skinId>/`, backs up + appends new skin object to `pet.js` `skins` array.
 
 ## Success criteria
 
-Before reporting completion, confirm:
-- `validate_output.py` returns `ok: true` or prints `OK`.
-- All 8 required frame keys exist in `manifest.json`.
-- `pet.config.js` contains all 8 required frame keys.
-- If cloud was requested, `pet.config.js` also contains the `cloud` key.
-- At least one generated PNG has been inspected when image-viewing tools are available; especially check that `walk-right-1.png` faces right.
+Before reporting completion:
+- `validate_output.py` returns ok.
+- All required frame keys exist in `manifest.json`.
+- Target config (pet.config.js or pet.js) contains all installed frame keys.
+- At least one PNG inspected when vision tools available (especially walk-right faces right).
+- For multi-skin: new skin id appears in pet.js skins array.
 
 ## Repair and iteration
 
-- Single-frame repair:
-  ```bash
-  python scripts/generate_sprites.py --skill-plan <plan.json> --out <workdir>/sprites --only walkRight
-  ```
-  Then inspect the repaired PNG. Do not install a repair-only partial manifest unless the user explicitly accepts partial installation.
-- Full rerun with same idol: set `reuse_idol: true` in `plan.json`.
-- Skip already generated sprites: set `reuse_existing: true` in `plan.json`.
-- Include cloud via plan: set `generateCloud: true` in `plan.json`.
-- Dry run without API calls:
-  ```bash
-  python scripts/pet_reskin.py --plan <plan.json> --target <canvas-pet-root> --out <workdir>/sprites --dry-run
-  ```
+- Single-frame repair: `python scripts/generate_sprites.py --skill-plan plan.json --out sprites --only walkRight`
+- Reuse cached idol: `reuse_idol: true` in plan.json
+- Skip finished sprites: `reuse_existing: true` in plan.json
+- Dry run: `--dry-run`
 
 ## Important constraints
 
-- Do not edit `pet.js` or the runtime engine unless the user explicitly asks for engine work.
-- Do not assume the target project path.
-- Do not silently install incomplete sprite sets.
-- Prefer the scripts over ad-hoc edits; they encode the project contract and validation checks.
+- Do not edit runtime engine files (pet.js engine logic, pet.config.js structure beyond frames/quotes/baseSize) unless explicitly asked.
+- Do not assume target architecture — let auto-detection work or pass `--target-type`.
+- Do not silently install incomplete sprite sets (strict by default; `--allow-partial` to override).
+- Prefer scripts over ad-hoc edits; they encode the project contract.

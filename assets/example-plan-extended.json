@@ -1,0 +1,21 @@
+{
+  "character": "小豆",
+  "description": "豆子形状的小人角色，奶油色身体，橄榄绿开衫，奶油衬衫，小麦色裤子，黑色头发，黑色圆点眼睛，温暖微笑，陶土色腮红，书卷气质的教育向导角色",
+  "style": "3D 渲染写实卡通，PBR 材质，软阴影，暖色陶瓷调",
+  "baseSize": 88,
+  "provider": "image2api",
+  "background": "white",
+  "frameSet": "extended16",
+  "referenceImage": "./assets/model/小豆-cutout.png",
+  "referenceAsIdle": true,
+  "generateCloud": true,
+  "cloudRole": "scroll",
+  "quotes": [
+    "路还长，慢慢走。",
+    "把书读薄，把事做实。",
+    "好奇是起点，耐心是路。",
+    "教是最好的学。"
+  ],
+  "reuse_idol": false,
+  "reuse_existing": false
+}

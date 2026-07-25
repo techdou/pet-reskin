@@ -37,6 +37,9 @@ except ImportError:
     print("ERROR: numpy is required. Install with: pip install numpy", file=sys.stderr)
     sys.exit(2)
 
+# 让同目录的子包可 import（providers/、background_removal.py、frames.py）
+sys.path.insert(0, str(Path(__file__).parent))
+
 DEFAULT_MODEL_ID = os.environ.get("GEMINI_IMAGE_MODEL", "gemini-3-pro-image")
 API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 IMAGE_SIZE = os.environ.get("GEMINI_IMAGE_SIZE", "1K")
@@ -553,7 +556,7 @@ def main() -> None:
     args = parser.parse_args()
     cloud_override = True if args.with_cloud else False if args.without_cloud else None
     raise SystemExit(
-        run(
+        run_v2(
             args.skill_plan,
             args.out,
             args.model,
@@ -563,6 +566,231 @@ def main() -> None:
             cloud_override=cloud_override,
         )
     )
+
+
+def _is_new_mode(plan: Dict[str, Any]) -> bool:
+    """判断是否走新模式（provider 抽象 + 可插拔抠图 + 帧模板 + referenceImage）。
+
+    任一新字段出现就走新模式；全缺省时走老模式（Gemini + chroma + base8），保证向后兼容。
+    """
+    if plan.get("provider", "gemini") != "gemini":
+        return True
+    if plan.get("background", "chroma") != "chroma":
+        return True
+    if plan.get("frameSet", "base8") != "base8":
+        return True
+    if plan.get("frames"):
+        return True
+    if plan.get("referenceImage"):
+        return True
+    return False
+
+
+def run_new_mode(
+    plan: Dict[str, Any],
+    plan_path: Path,
+    out_dir: Path,
+    only: Optional[str],
+    dry_run: bool,
+    cloud_override: Optional[bool],
+) -> int:
+    """新模式：provider 抽象层 + 可插拔抠图 + 帧模板 + referenceImage 支持。"""
+    from providers import get_provider
+    from background_removal import remove_background, detect_color_collision
+    from frames import resolve_frames, get_cloud_frame
+
+    plan["generateCloud"] = resolve_generate_cloud(plan, cloud_override)
+
+    # 解析帧清单（支持 frameSet 模板 / 自定义 frames 数组）
+    base_frames = resolve_frames(plan)
+    cloud_frame = get_cloud_frame()
+    selected = list(base_frames)
+    if plan["generateCloud"]:
+        selected.append(cloud_frame)
+
+    # --only 过滤（修复模式）
+    if only:
+        requested = {item.strip() for item in only.split(",") if item.strip()}
+        all_aliases = {alias for sp in selected for alias in (sp["frame"], sp["file"], sp.get("role", ""))}
+        selected = [sp for sp in selected if {sp["frame"], sp["file"], sp.get("role", "")} & requested]
+        unknown = requested - all_aliases
+        if unknown:
+            print(f"ERROR: unknown --only sprite(s): {', '.join(sorted(unknown))}", file=sys.stderr)
+            return 1
+
+    # 抠图策略
+    bg_strategy = plan.get("background", "chroma")
+    key_rgb, key_hex = resolve_key_color(plan)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "raw").mkdir(exist_ok=True)
+    plan["keyColor"] = key_hex
+    (out_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    if dry_run:
+        preview = {
+            "ok": True,
+            "dryRun": True,
+            "mode": "new",
+            "plan": plan,
+            "provider": plan.get("provider", "gemini"),
+            "background": bg_strategy,
+            "frameSet": plan.get("frameSet", "base8"),
+            "selectedSprites": [sp["frame"] for sp in selected],
+            "hasReferenceImage": bool(plan.get("referenceImage")),
+        }
+        print(json.dumps(preview, ensure_ascii=False, indent=2))
+        return 0
+
+    # 初始化 provider
+    provider = get_provider(plan)
+
+    # ===== referenceImage 处理 =====
+    reference_bytes: Optional[bytes] = None
+    reference_path_str = plan.get("referenceImage")
+    if reference_path_str:
+        ref_path = Path(reference_path_str)
+        if not ref_path.is_absolute():
+            # 相对 plan.json 所在目录
+            ref_path = plan_path.parent / ref_path
+        if not ref_path.exists():
+            print(f"ERROR: referenceImage not found: {ref_path}", file=sys.stderr)
+            return 1
+        reference_bytes = ref_path.read_bytes()
+        # referenceAsIdle: 直接当 idle 帧（省 1 次调用）
+        if plan.get("referenceAsIdle") and not only:
+            idle_file = next((sp for sp in selected if sp["frame"] == "idle"), None)
+            if idle_file:
+                # 复制参考图作为 idle 原图，再走抠图
+                (out_dir / "raw" / idle_file["file"]).write_bytes(reference_bytes)
+                processed = remove_background(reference_bytes, strategy=bg_strategy, key_rgb=key_rgb)
+                (out_dir / idle_file["file"]).write_bytes(processed)
+                print(f"  ✓ {idle_file['file']} (from referenceImage)")
+
+    # ===== idol 生成（无 referenceImage 时） =====
+    idol_bytes: Optional[bytes] = None
+    if reference_bytes is None:
+        print("▶ Generating idol reference…")
+        idol_bytes = provider.generate(idol_prompt(plan, key_hex))
+        (out_dir / "raw" / "idol.png").write_bytes(idol_bytes)
+        (out_dir / "idol.png").write_bytes(idol_bytes)
+        print(f"  ✓ idol.png")
+
+        # 撞色诊断（仅 chroma 模式）
+        if bg_strategy == "chroma":
+            diag = detect_color_collision(idol_bytes, key_rgb)
+            if diag["collision"]:
+                sample = diag.get("sample_pixel")
+                sample_str = f"（角色样本色 RGB{sample}）" if sample else ""
+                print(
+                    f"\nERROR: 角色与抠图背景色 {key_hex} 撞色{sample_str}。\n"
+                    f"  约 {diag['ratio']*100:.0f}% 的角色像素落入抠图渐变带。\n"
+                    f"  请在 plan.json 里换 keyColor（偏绿用 #FF00FF、偏红用 #00FFFF、偏蓝用 #FFFF00），\n"
+                    f"  或改用 \"background\": \"white\" 走白底抠图（无撞色问题）。",
+                    file=sys.stderr,
+                )
+                return 1
+
+    # 生成各帧
+    results: List[Dict[str, Any]] = []
+    failures: List[Dict[str, str]] = []
+    # 参考图字节：优先 referenceImage，其次 idol
+    ref_for_sprites = reference_bytes or idol_bytes
+
+    for sp in selected:
+        # referenceAsIdle 时跳过 idle（已从参考图复制）
+        if plan.get("referenceAsIdle") and sp["frame"] == "idle" and not only:
+            results.append(sp)
+            continue
+
+        dest = out_dir / sp["file"]
+        if dest.exists() and plan.get("reuse_existing"):
+            print(f"✓ Reusing existing sprite: {sp['file']}")
+            results.append(sp)
+            continue
+
+        role = sp.get("role", sp["frame"])
+        pose = sp.get("pose", sprite_pose(role))
+        try:
+            print(f"▶ Generating {sp['file']} ({role})…")
+            # 有参考图走 edit，无则走 generate（cloud 等不需要参考图）
+            if sp.get("needsRef", True) and ref_for_sprites:
+                raw = provider.edit(sprite_prompt_with_pose(plan, role, pose, key_hex), ref_for_sprites)
+            else:
+                raw = provider.generate(sprite_prompt_with_pose(plan, role, pose, key_hex))
+            (out_dir / "raw" / sp["file"]).write_bytes(raw)
+            processed = remove_background(raw, strategy=bg_strategy, key_rgb=key_rgb)
+            dest.write_bytes(processed)
+            print(f"  ✓ {dest}")
+            results.append(sp)
+        except Exception as exc:
+            message = str(exc)
+            failures.append({"frame": sp["frame"], "file": sp["file"], "error": message})
+            print(f"  ✗ {sp['file']} failed: {message}", file=sys.stderr)
+
+    manifest = write_manifest(out_dir, plan, plan.get("provider", "gemini"), selected, results, failures)
+    print(f"\n✅ Generated {len(results)}/{len(selected)} sprites → {out_dir}")
+    print(f"   manifest: {out_dir / 'manifest.json'}")
+
+    # strict 检查（非 only 模式）
+    if not only:
+        required_frame_keys = [sp["frame"] for sp in base_frames]
+        missing = [f for f in required_frame_keys if f not in manifest["frames"]]
+        if missing:
+            print(f"ERROR: missing required frames: {', '.join(missing)}", file=sys.stderr)
+            return 1
+    return 0
+
+
+def sprite_prompt_with_pose(plan: Dict[str, Any], role: str, pose: str, key_hex: str) -> str:
+    """带自定义 pose 的 sprite prompt（新模式用，支持帧模板里的 pose 字段）。"""
+    if role == "cloud":
+        return cloud_prompt(key_hex)
+    bg_instruction = (
+        f"Use a single flat chroma-key background: {key_hex}."
+        if plan.get("background", "chroma") == "chroma"
+        else "Use a pure flat white background (#FFFFFF)."
+    )
+    return compact_prompt({
+        "Task": "Create one frame for a consistent web desktop pet sprite animation, using the provided reference image as the identity source.",
+        "Reference image usage": [
+            f"Use the reference image as the canonical design for {plan['character']}.",
+            "Preserve identity; do not redesign the character.",
+            "Keep the same color palette, head size, body ratio, eye shape, outline thickness, clothing/accessories if any, and all signature features.",
+        ],
+        "Pose": pose,
+        "Style": [
+            f"Match the reference style: {plan.get('style')}.",
+            "Clean mascot/vector-illustration sprite, readable at small size, polished but simple.",
+        ],
+        "Composition": [
+            "Exactly one character only.",
+            "Full body visible, centered in a square canvas, fully inside the canvas, with consistent scale across frames.",
+            "Clean silhouette suitable for animation; avoid motion blur, perspective distortion, and overly detailed textures.",
+        ],
+        "Output constraints": [
+            bg_instruction,
+            "Keep the background perfectly solid and uniform, with no gradient, texture, scenery, floor, or shadow.",
+            "Do not add text, captions, UI elements, watermarks, logos, duplicate characters, extra props, or extra objects.",
+        ],
+    })
+
+
+def run_v2(
+    plan_path: Path,
+    out_dir: Path,
+    model_id: str,
+    strict: bool,
+    only: Optional[str],
+    dry_run: bool,
+    cloud_override: Optional[bool],
+) -> int:
+    """统一入口：根据 plan 字段分发到新模式或老模式。"""
+    plan = load_plan(plan_path)
+    if _is_new_mode(plan):
+        return run_new_mode(plan, plan_path, out_dir, only, dry_run, cloud_override)
+    # 老模式：完全走原 run() 逻辑（Gemini + chroma + base8）
+    return run(plan_path, out_dir, model_id, strict, only, dry_run, cloud_override)
 
 
 if __name__ == "__main__":
