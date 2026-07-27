@@ -1,4 +1,29 @@
-# pet-reskin
+# pet-reskin | 桌宠换装
+
+[English](#english) | [中文](#中文)
+
+---
+
+<a id="中文"></a>
+## 中文
+
+Agent Skill，为 `canvas-pet` / 多 skin 网页桌宠生成并安装完整角色皮肤套。
+
+### 触发场景
+
+- 给桌宠生成完整精灵图套件（基础 8 帧 / 扩展 16 帧 / 自定义）
+- 替换或安装桌宠皮肤
+- 支持两种项目架构（单 skin `pet.config.js`、多 skin `pet.js` skins 数组）
+- 支持两种生图 provider（Gemini、image2-api 的 gpt-image-2）
+
+不适用于：单张吉祥物图、Logo、头像、纯提示词插画。
+
+下方英文为完整文档。
+
+---
+
+<a id="english"></a>
+## English
 
 `pet-reskin` is an Agent Skill for generating and installing a complete `canvas-pet` character skin.
 
